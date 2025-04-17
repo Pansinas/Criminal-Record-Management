@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: crime-record-system
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port 10000 --server.address 0.0.0.0
+    envVars:
+      - key: MONGODB_URI
+        value: YOUR_MONGODB_ATLAS_URI
