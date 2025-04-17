@@ -6,3 +6,4 @@ pandas==1.5.3
 numpy==1.23.5
 dnspython==2.2.1
 altair==4.2.2
+werkzeug==2.2.3
