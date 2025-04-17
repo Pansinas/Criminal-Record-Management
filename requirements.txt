@@ -1,6 +1,6 @@
-streamlit
-pymongo
-python-dotenv
-werkzeug
-pandas
-plotly
+streamlit==1.13.0
+pymongo[srv]==4.3.3
+python-dotenv==0.21.0
+plotly==5.11.0
+pandas==1.5.2
+dnspython==2.2.1
