@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 import pandas as pd
 import plotly.express as px
+import re
 
 # Load environment variables
 load_dotenv()
@@ -23,27 +24,40 @@ def init_session_state():
 
 init_session_state()
 
-# MongoDB Atlas connection with error handling
+# Secure MongoDB Atlas connection
 try:
-    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://pansinas:<password>@cluster0.novrfdr.mongodb.net/crime_record_db?retryWrites=true&w=majority")
+    MONGODB_URI = os.getenv("MONGODB_URI")
     
+    if not MONGODB_URI:
+        st.error("MongoDB connection string not configured in environment variables")
+        st.stop()
+
     client = MongoClient(
         MONGODB_URI,
         serverSelectionTimeoutMS=5000,
         socketTimeoutMS=30000,
-        connectTimeoutMS=30000
+        connectTimeoutMS=30000,
+        retryWrites=True,
+        retryReads=True,
+        appName="CrimeRecordSystem-v1"
     )
     
-    client.server_info()
-    db = client["crime_record_db"]
-    users_col = db["users"]
-    crimes_col = db["crimes"]
-    complaints_col = db["complaints"]
-    access_requests_col = db["access_requests"]
+    # Test connection
+    client.admin.command('ping')
+    db = client.get_database("crime_record_db")
+    
+    # Initialize collections
+    users_col = db.users
+    crimes_col = db.crimes
+    complaints_col = db.complaints
+    access_requests_col = db.access_requests
     
 except Exception as e:
-    st.error(f"Failed to connect to MongoDB Atlas: {str(e)}")
-    st.error("Please check your connection settings")
+    st.error(f"Database connection failed: {str(e)}")
+    st.error("Troubleshooting steps:")
+    st.error("1. Verify MONGODB_URI in .env/Render config")
+    st.error("2. Check Atlas IP whitelist and credentials")
+    st.error("3. Ensure database exists in Atlas")
     st.stop()
 
 # Utility functions
@@ -67,9 +81,8 @@ def login(username, password, user_type):
         if username == "admin123" and password == "Admin1226":
             st.session_state.login_attempts = 0
             return True
-        else:
-            st.session_state.login_attempts += 1
-            return False
+        st.session_state.login_attempts += 1
+        return False
     
     user = users_col.find_one({"username": username, "type": user_type})
     if user and check_password_hash(user["password"], password):
@@ -181,22 +194,70 @@ def register_page():
 
 def public_dashboard():
     st.sidebar.title(f"Public Dashboard")
+    st.sidebar.write(f"Welcome, {st.session_state.username}")
     menu = st.sidebar.selectbox("Menu", ["Search Crimes", "File Complaint", "My Complaints", "Logout"])
     
     if menu == "Search Crimes":
         st.header("🔎 Search Crimes")
-        # Implement crime search functionality
-        st.write("Crime search functionality would go here")
+        search_option = st.radio("Search by", ["Crime ID", "Location", "Date Range"])
+        
+        if search_option == "Crime ID":
+            cid = st.number_input("Enter Crime ID", min_value=1)
+            if st.button("Search"):
+                crime = crimes_col.find_one({"crime_id": cid})
+                if crime:
+                    st.json(crime)
+                else:
+                    st.warning("Crime not found")
+        
+        elif search_option == "Location":
+            location = st.text_input("Enter Location")
+            if st.button("Search"):
+                crimes = list(crimes_col.find({"location": {"$regex": location, "$options": "i"}}))
+                st.write(pd.DataFrame(crimes))
+        
+        elif search_option == "Date Range":
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("Start Date")
+            with col2:
+                end_date = st.date_input("End Date")
+            
+            if st.button("Search"):
+                crimes = list(crimes_col.find({
+                    "date": {
+                        "$gte": datetime.combine(start_date, datetime.min.time()),
+                        "$lte": datetime.combine(end_date, datetime.max.time())
+                    }
+                }))
+                st.write(pd.DataFrame(crimes))
     
     elif menu == "File Complaint":
         st.header("📝 File Complaint")
-        # Implement complaint filing
-        st.write("Complaint filing form would go here")
+        with st.form("complaint_form"):
+            name = st.text_input("Your Name")
+            description = st.text_area("Complaint Details")
+            location = st.text_input("Location")
+            date = st.date_input("Incident Date")
+            
+            if st.form_submit_button("Submit"):
+                complaint_id = get_next_id(complaints_col, "complaint_id")
+                complaints_col.insert_one({
+                    "complaint_id": complaint_id,
+                    "username": st.session_state.username,
+                    "name": name,
+                    "description": description,
+                    "location": location,
+                    "date": datetime.combine(date, datetime.min.time()),
+                    "status": "Pending",
+                    "created_at": datetime.now()
+                })
+                st.success("Complaint filed successfully!")
     
     elif menu == "My Complaints":
         st.header("📋 My Complaints")
-        # Show user's complaints
-        st.write("List of user's complaints would go here")
+        complaints = list(complaints_col.find({"username": st.session_state.username}))
+        st.write(pd.DataFrame(complaints))
     
     elif menu == "Logout":
         logout()
@@ -204,22 +265,78 @@ def public_dashboard():
 
 def department_dashboard():
     st.sidebar.title(f"Department Dashboard")
+    st.sidebar.write(f"Welcome, {st.session_state.username}")
     menu = st.sidebar.selectbox("Menu", ["Manage Complaints", "Manage Crimes", "Analytics", "Logout"])
     
     if menu == "Manage Complaints":
         st.header("📩 Manage Complaints")
-        # Implement complaint management
-        st.write("Complaint management interface would go here")
+        complaints = list(complaints_col.find())
+        
+        for complaint in complaints:
+            with st.expander(f"Complaint #{complaint['complaint_id']}"):
+                st.write(complaint)
+                new_status = st.selectbox(
+                    "Update Status",
+                    ["Pending", "In Progress", "Resolved"],
+                    key=f"status_{complaint['_id']}"
+                )
+                if st.button("Update", key=f"update_{complaint['_id']}"):
+                    complaints_col.update_one(
+                        {"_id": complaint["_id"]},
+                        {"$set": {"status": new_status}}
+                    )
+                    st.rerun()
     
     elif menu == "Manage Crimes":
         st.header("🔧 Manage Crimes")
-        # Implement crime management
-        st.write("Crime management interface would go here")
+        tab1, tab2 = st.tabs(["Add Crime", "View Crimes"])
+        
+        with tab1:
+            with st.form("add_crime"):
+                name = st.text_input("Offender Name")
+                description = st.text_input("Crime Description")
+                location = st.text_input("Location")
+                date = st.date_input("Date")
+                
+                if st.form_submit_button("Add Crime"):
+                    crime_id = get_next_id(crimes_col, "crime_id")
+                    crimes_col.insert_one({
+                        "crime_id": crime_id,
+                        "name": name,
+                        "description": description,
+                        "location": location,
+                        "date": datetime.combine(date, datetime.min.time()),
+                        "added_by": st.session_state.username,
+                        "created_at": datetime.now()
+                    })
+                    st.success("Crime added successfully!")
+        
+        with tab2:
+            crimes = list(crimes_col.find())
+            st.write(pd.DataFrame(crimes))
     
     elif menu == "Analytics":
         st.header("📊 Crime Analytics")
-        # Implement analytics
-        st.write("Analytics dashboard would go here")
+        
+        # Crime location distribution
+        st.subheader("Crime Locations")
+        location_data = list(crimes_col.aggregate([
+            {"$group": {"_id": "$location", "count": {"$sum": 1}}}
+        ]))
+        if location_data:
+            df = pd.DataFrame(location_data)
+            fig = px.bar(df, x="_id", y="count", title="Crimes by Location")
+            st.plotly_chart(fig)
+        
+        # Complaint status distribution
+        st.subheader("Complaint Status")
+        status_data = list(complaints_col.aggregate([
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ]))
+        if status_data:
+            df = pd.DataFrame(status_data)
+            fig = px.pie(df, names="_id", values="count", title="Complaint Status Distribution")
+            st.plotly_chart(fig)
     
     elif menu == "Logout":
         logout()
@@ -227,22 +344,35 @@ def department_dashboard():
 
 def admin_dashboard():
     st.sidebar.title(f"Admin Dashboard")
+    st.sidebar.write(f"Welcome, {st.session_state.username}")
     menu = st.sidebar.selectbox("Menu", ["Approve Requests", "Manage Users", "System Logs", "Logout"])
     
     if menu == "Approve Requests":
         st.header("🛂 Approve Department Requests")
-        # Implement request approval
-        st.write("Department request approval interface would go here")
+        requests = list(access_requests_col.find({"status": "pending"}))
+        
+        if not requests:
+            st.info("No pending requests")
+        else:
+            for req in requests:
+                with st.expander(f"Request from {req['username']}"):
+                    st.write(f"Requested at: {req['requested_at']}")
+                    if st.button(f"Approve {req['username']}", key=f"approve_{req['_id']}"):
+                        success, message = approve_department_user(req["_id"])
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
     
     elif menu == "Manage Users":
         st.header("👥 User Management")
-        # Implement user management
-        st.write("User management interface would go here")
+        users = list(users_col.find({}, {"password": 0}))
+        st.write(pd.DataFrame(users))
     
     elif menu == "System Logs":
         st.header("📜 System Activity")
-        # Implement system logs
-        st.write("System activity logs would go here")
+        st.write("Recent user activity would appear here")
     
     elif menu == "Logout":
         logout()
