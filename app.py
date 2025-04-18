@@ -230,7 +230,10 @@ class RegistrationPage:
             
             password = st.text_input("Create Password*", type="password")
             user_type = st.selectbox("Account Type*", ["public", "department"])
-            police_id = st.text_input("Police ID*") if user_type == "department" else None
+            if user_type == "department":
+                police_id = st.text_input("Police ID* (e.g., TN123)")
+            else:
+                police_id = None
             
             if st.form_submit_button("Complete Registration"):
                 errors = []
