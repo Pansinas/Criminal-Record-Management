@@ -31,7 +31,7 @@ def get_db_connection():
     try:
         # Using your password (replace with environment variable in production)
         client = MongoClient(
-            "mongodb+srv://pansinas:pansinas@cluster0.novrfdr.mongodb.net/crime_record_db?retryWrites=true&w=majority&appName=Cluster0",
+            "MONGO_URI=mongodb+srv://pansinas:pansinas@cluster0.novrfdr.mongodb.net/crime_record_db?retryWrites=true&w=majority&appName=Cluster0",
             serverSelectionTimeoutMS=5000,
             socketTimeoutMS=30000,
             connectTimeoutMS=10000
