@@ -38,18 +38,40 @@ class DatabaseManager:
         return cls._instance
 
     def init_db(self):
-        try:
-            self.client = MongoClient(
-                os.getenv("MONGO_URI"),
-                serverSelectionTimeoutMS=5000,
-                socketTimeoutMS=30000,
-                connectTimeoutMS=10000
-            )
-            self.client.server_info()
-            self.db = self.client["crime_record_db"]
-        except Exception as e:
-            st.error(f"Database connection failed: {str(e)}")
-            st.stop()
+        max_retries = 3
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                # Try cloud MongoDB first
+                self.client = MongoClient(
+                    os.getenv("MONGO_URI"),
+                    serverSelectionTimeoutMS=5000,
+                    socketTimeoutMS=30000,
+                    connectTimeoutMS=10000
+                )
+                self.client.server_info()
+                self.db = self.client["crime_record_db"]
+                st.success("Connected to cloud database successfully")
+                return
+            except Exception as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    st.warning(f"Connection attempt {retry_count} failed. Retrying...")
+                    time.sleep(2)
+                else:
+                    try:
+                        # Fallback to local MongoDB
+                        st.warning("Cloud connection failed. Attempting local connection...")
+                        self.client = MongoClient('mongodb://localhost:27017/')
+                        self.client.server_info()
+                        self.db = self.client["crime_record_db"]
+                        st.success("Connected to local database successfully")
+                        return
+                    except Exception as local_e:
+                        st.error("All connection attempts failed. Please check your database configuration.")
+                        st.error(f"Cloud Error: {str(e)}")
+                        st.error(f"Local Error: {str(local_e)}")
+                        st.stop()
 
     def get_collection(self, name):
         return self.db[name]
