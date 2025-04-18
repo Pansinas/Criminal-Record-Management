@@ -76,6 +76,10 @@ class ValidationService:
         return re.match(r"^\d{10}$", number)
 
     @staticmethod
+    def police_id(id):
+        return re.match(r"^[A-Z]{2}\d{3}$", id)
+
+    @staticmethod
     def password(password):
         return len(password) >= 8
 
@@ -92,7 +96,7 @@ class AuthService:
     LOCKOUT_TIME = timedelta(minutes=5)
 
     @classmethod
-    def login(cls, email, password, user_type):
+    def login(cls, email, password, user_type, police_id=None):
         if cls._is_locked_out():
             st.warning("Too many failed attempts. Try again later.")
             return False
@@ -102,7 +106,13 @@ class AuthService:
                 cls._reset_login_attempts()
                 return True
 
-        user = users_col.find_one({"email": email, "type": user_type})
+        query = {"email": email, "type": user_type}
+        if user_type == "department" and not police_id:
+            return False
+        elif user_type == "department":
+            query["police_id"] = police_id
+
+        user = users_col.find_one(query)
         if user and check_password_hash(user["password"], password):
             st.session_state.user_data = user  # Store user details
             cls._reset_login_attempts()
@@ -121,11 +131,16 @@ class AuthService:
         env_email = os.getenv("ADMIN_EMAIL")
         env_password = os.getenv("ADMIN_PASSWORD")
         
-        # Use environment variables if available, otherwise fall back to defaults
-        admin_email = env_email if env_email else cls.DEFAULT_ADMIN_EMAIL
-        admin_password = env_password if env_password else cls.DEFAULT_ADMIN_PASSWORD
+        # Check environment variables first
+        if env_email and env_password:
+            if email == env_email and password == env_password:
+                return True
         
-        return email == admin_email and password == admin_password
+        # Fall back to default credentials
+        if email == cls.DEFAULT_ADMIN_EMAIL and password == cls.DEFAULT_ADMIN_PASSWORD:
+            return True
+        
+        return False
 
     @classmethod
     def _is_locked_out(cls):
@@ -170,13 +185,18 @@ class LoginPage:
             login_type = st.selectbox("Login as", ["public", "department", "admin"])
             email = st.text_input("Official Email")
             password = st.text_input("Password", type="password")
+            police_id = st.text_input("Police ID") if login_type == "department" else None
 
             if st.button("Login", type="primary"):
                 if not ValidationService.email(email):
                     st.error("Invalid email format")
                     return
                 
-                if AuthService.login(email, password, login_type):
+                if login_type == "department" and not ValidationService.police_id(police_id):
+                    st.error("Invalid Police ID format (e.g., TN123)")
+                    return
+                
+                if AuthService.login(email, password, login_type, police_id):
                     st.session_state.update({
                         "email": email,
                         "user_type": login_type,
@@ -210,6 +230,7 @@ class RegistrationPage:
             
             password = st.text_input("Create Password*", type="password")
             user_type = st.selectbox("Account Type*", ["public", "department"])
+            police_id = st.text_input("Police ID*") if user_type == "department" else None
             
             if st.form_submit_button("Complete Registration"):
                 errors = []
@@ -217,6 +238,9 @@ class RegistrationPage:
                 if not ValidationService.email(email): errors.append("Invalid email format")
                 if not ValidationService.aadhar(aadhar): errors.append("Invalid Aadhar number")
                 if not ValidationService.password(password): errors.append("Password must be 8+ characters")
+                if user_type == "department":
+                    if not police_id: errors.append("Police ID is required")
+                    elif not ValidationService.police_id(police_id): errors.append("Invalid Police ID format (e.g., TN123)")
                 
                 if errors:
                     for error in errors: st.error(error)
@@ -227,7 +251,8 @@ class RegistrationPage:
                         "aadhar": aadhar,
                         "phone": phone,
                         "password": password,
-                        "type": user_type
+                        "type": user_type,
+                        "police_id": police_id if user_type == "department" else None
                     }
                     success, message = AuthService.register(user_data)
                     if success:
@@ -381,12 +406,25 @@ class DepartmentDashboard:
         st.header("📑 Review Complaints")
         
         # Filter controls
-        status_filter = st.multiselect("Filter by Status", ["pending", "under_review", "approved", "rejected"], default=["pending"])
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            status_filter = st.multiselect("Filter by Status", ["pending", "under_review", "approved", "rejected"], default=["pending"])
+        with col2:
+            crime_type_filter = st.multiselect("Filter by Crime Type", ["Theft", "Assault", "Fraud", "Cyber Crime", "Property Dispute"])
+        with col3:
+            date_range = st.date_input("Date Range", value=[datetime.now() - timedelta(days=30), datetime.now()])
         
         # Build query
         query = {}
         if status_filter:
             query["status"] = {"$in": status_filter}
+        if crime_type_filter:
+            query["crime_type"] = {"$in": crime_type_filter}
+        if len(date_range) == 2:
+            query["filed_at"] = {
+                "$gte": datetime.combine(date_range[0], datetime.min.time()),
+                "$lte": datetime.combine(date_range[1], datetime.max.time())
+            }
             
         # Fetch all complaints with optional filters
         complaints = list(complaints_col.find(query).sort("filed_at", -1))
