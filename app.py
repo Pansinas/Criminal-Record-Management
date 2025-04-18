@@ -111,10 +111,21 @@ class AuthService:
         cls._increment_login_attempts()
         return False
 
+    # Default admin credentials (for development/testing)
+    DEFAULT_ADMIN_EMAIL = "admin123@gmail.com"
+    DEFAULT_ADMIN_PASSWORD = "Admin@123"
+
     @classmethod
     def _authenticate_admin(cls, email, password):
-        return (email == os.getenv("ADMIN_EMAIL") and 
-                password == os.getenv("ADMIN_PASSWORD"))
+        # Try environment variables first
+        env_email = os.getenv("ADMIN_EMAIL")
+        env_password = os.getenv("ADMIN_PASSWORD")
+        
+        # Use environment variables if available, otherwise fall back to defaults
+        admin_email = env_email if env_email else cls.DEFAULT_ADMIN_EMAIL
+        admin_password = env_password if env_password else cls.DEFAULT_ADMIN_PASSWORD
+        
+        return email == admin_email and password == admin_password
 
     @classmethod
     def _is_locked_out(cls):
